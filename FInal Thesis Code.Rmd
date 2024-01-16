@@ -1,0 +1,968 @@
+---
+title: "Final Thesis Code"
+author: "Laura Hamilton"
+date: '2023-05-02'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      error = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      comment = NA)
+```
+
+```{r}
+setwd("C:/Users/Laura/OneDrive/Documents/Thesis") 
+```
+
+```{r}
+rm(list=ls()) 
+
+check.packages <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE,
+                     repos = "https://cran.rstudio.com")
+  sapply(pkg, require, character.only = TRUE)
+}
+
+check.packages(c("tidyverse","tidyr", "dplyr","data.table","readxl","haven", "estimatr", "plm", "stargazer", "texreg", "zoo","ncdf4",  "chron", "lattice", "RColorBrewer", "lubridate", "padr", "priceR", "tframePlus", "maditr", "gtrendsR","zoo" ,"TSstudio","CausalImpact"))
+
+```
+
+```{r FOI Data}
+FOIData<-read_excel("FOIData2017.xlsx", sheet="Table 1")
+
+
+FOI_NoNationality<-FOIData%>%
+  dplyr::select(-Nationality, -Year)
+
+
+FOIAgg_Methods<-FOI_NoNationality%>%
+  group_by(`Year and Month`, `Method of Entry`)%>%
+  summarise(Detections=sum(`Number of Detections`))%>%
+  ungroup()
+
+FOIAgg_Total<-FOI_NoNationality%>%
+  group_by(`Year and Month`)%>%
+  summarise(Detections=sum(`Number of Detections`))%>%
+  ungroup()
+
+FOITotal1<-FOIAgg_Total%>%
+  separate(`Year and Month`, c("Year", "Month"), sep=" ")%>%
+  mutate(Year=as.integer(Year), Month=as.integer(Month))
+FOITotal <- FOITotal1[-73,]
+FOITotal<-FOITotal%>%
+    mutate(Year=as.character(Year), Month=as.character(Month))
+
+FOITotal$Month <- sprintf("%02d", as.numeric(FOITotal$Month))
+
+FOIMethods1<-FOIAgg_Methods%>%
+  separate(`Year and Month`, c("Year", "Month"), sep=" ")%>%
+  mutate(Year=as.integer(Year), Month=as.integer(Month))
+
+FOI_Inad<-FOIMethods1%>%
+  filter(`Method of Entry`=="Inadequately documented air arrivals")%>%
+  complete(Year =seq(min(2017), max(2022), 1L) , Month = seq(min(1), max(12), 1L))%>%
+  replace_na(list(`Method of Entry` = "Inadequately documented air arrivals", Detections=0))
+
+FOI_Ports<-FOIMethods1%>%
+  filter(`Method of Entry`=="Recorded detections at UK ports")%>%
+  complete(Year =seq(min(2017), max(2022), 1L) , Month = seq(min(1), max(12), 1L))%>%
+  replace_na(list(`Method of Entry` = "Recorded detections at UK ports", Detections=0))
+
+FOI_InUK<-FOIMethods1%>%
+  filter(`Method of Entry`=="Recorded detections in the UK")%>%
+  complete(Year =seq(min(2017), max(2022), 1L) , Month = seq(min(1), max(12), 1L))%>%
+  replace_na(list(`Method of Entry` = "Recorded detections in the UK", Detections=0))
+
+FOI_SB<-FOIMethods1%>%
+  filter(`Method of Entry`=="Small boat arrivals")%>%
+  complete(Year =seq(min(2017), max(2022), 1L) , Month = seq(min(1), max(12), 1L))%>%
+  replace_na(list(`Method of Entry` = "Small boat arrivals", Detections=0))
+
+
+FOIMethods2<-bind_rows(FOI_Inad, FOI_Ports, FOI_InUK, FOI_SB)%>%
+  mutate(Year=as.character(Year), Month=as.character(Month))
+
+FOIMethods2$Month <- sprintf("%02d", as.numeric(FOIMethods2$Month))
+
+FOIMethods<- FOIMethods2%>%dcast(Year+Month ~ `Method of Entry`)
+
+FOI_Complete<-merge(FOITotal, FOIMethods, by=c("Year", "Month"))
+
+```
+
+```{r Read excel Conflicts}
+CE1<-read_excel("Conflict_Events1.xlsx")
+```
+
+```{r Chunk 7-13: Conflict - VoC (Violence against civilians) Missing Kuwait}
+VaC<-CE1 %>%
+  filter(event_type == 'Violence against civilians') %>%
+  group_by(country) %>% 
+  dplyr::select(event_date, event_type, country)%>%
+  ungroup()%>%
+  filter(country!='United Arab Emirates')%>%filter(country!='Saudi Arabia')%>%filter(country!='Qatar')%>%filter(country!='Oman')
+
+VaC$Date <- as.Date(VaC$event_date, "%Y/%m/%d")
+setDT(VaC)
+VaC_counted<-VaC[, .N, by=.(Date, country)] 
+
+VaC_counted1<-VaC_counted%>%
+  rename(VaC_Occurences=N, Country=country) %>%
+  na.omit()
+
+
+VaC_padded<-pad(VaC_counted1, group="Country",  start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+VaC_padded<-replace(VaC_padded,is.na(VaC_padded), 0)
+
+VaC_padded$Date<-as.character(VaC_padded$Date)
+VaC_reshaped<-dcast(VaC_padded, Date ~ Country)
+VaC<-VaC_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(VaC_Afg=Afghanistan,VaC_Alb=Albania, VaC_Alg=Algeria,VaC_Bah=Bahrain,VaC_Dji=Djibouti, VaC_Egp=Egypt, VaC_Eri=Eritrea, VaC_Eth=Ethiopia, Vac_Geo=Georgia, VaC_Ind=India, VaC_Iran=Iran, VaC_Iraq=Iraq, VaC_Isr=Israel,VaC_Jor=Jordan,VaC_Leb=Lebanon, VaC_Lib=Libya, VaC_Mor=Morocco, VaC_Pak=Pakistan,  VaC_Sri=`Sri Lanka`, VaC_Sud=Sudan, VaC_Syr=Syria, VaC_Tun=Tunisia, VaC_Turk=Turkey, VaC_Viet=Vietnam, VaC_Yem=Yemen)
+
+
+```
+
+```{r Conflict: Protests}
+Protests<-CE1 %>%
+  filter(event_type == 'Protests') %>%
+  group_by(country) %>% 
+  dplyr::select(event_date, event_type, country)%>%
+  filter(country!='United Arab Emirates')%>%filter(country!='Saudi Arabia')%>%filter(country!='Qatar')%>%filter(country!='Oman')
+
+
+Protests$Date <- as.Date(Protests$event_date, "%Y/%m/%d")
+setDT(Protests)
+Protests_counted<-Protests[, .N, by=.(Date, country)] 
+
+Protests_counted1<-Protests_counted%>%
+  rename(Protest_Occurences=N, Country=country) %>%
+  na.omit()
+
+
+Protests_padded<-pad(Protests_counted1, group="Country",  start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Protests_padded<-replace(Protests_padded,is.na(Protests_padded), 0)
+
+
+Protests_padded$Date<-as.character(Protests_padded$Date)
+Protests_reshaped<-dcast(Protests_padded, Date ~ Country)
+Protests<-Protests_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Pro_Afg=Afghanistan,Pro_Alb=Albania, Pro_Alg=Algeria,Pro_Bah=Bahrain,Pro_Dji=Djibouti, Pro_Egp=Egypt, Pro_Eri=Eritrea, Pro_Eth=Ethiopia, Pro_Geo=Georgia, Pro_Ind=India, Pro_Iran=Iran, Pro_Iraq=Iraq, Pro_Isr=Israel,Pro_Jor=Jordan,Pro_Kuw=Kuwait,Pro_Leb=Lebanon, Pro_Lib=Libya, Pro_Mor=Morocco, Pro_Pak=Pakistan, Pro_Sri=`Sri Lanka`, Pro_Sud=Sudan, Pro_Syr=Syria, Pro_Tun=Tunisia, Pro_Turk=Turkey,  Pro_Viet=Vietnam, Pro_Yem=Yemen)
+
+
+```
+
+```{r Conflict: Strategic developments}
+StrDevs<-CE1 %>%
+  filter(event_type == 'Strategic developments') %>%
+  group_by(country) %>% 
+  dplyr::select(event_date, event_type, country)%>%
+  filter(country!='United Arab Emirates')%>%filter(country!='Saudi Arabia')%>%filter(country!='Qatar')%>%filter(country!='Oman')
+
+
+StrDevs$Date <- as.Date(StrDevs$event_date, "%Y/%m/%d")
+setDT(StrDevs)
+StrDevs_counted<-StrDevs[, .N, by=.(Date, country)] 
+
+StrDevs_counted1<-StrDevs_counted%>%
+  rename(StrDevs_Occurences=N, Country=country) %>%
+  na.omit()
+
+
+StrDevs_padded<-pad(StrDevs_counted1, group="Country",  start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+StrDevs_padded<-replace(StrDevs_padded, is.na(StrDevs_padded), 0)
+
+
+StrDevs_padded$Date<-as.character(StrDevs_padded$Date)
+StrDevs_reshaped<-dcast(StrDevs_padded, Date ~ Country)
+StrDevs<-StrDevs_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(SD_Afg=Afghanistan,SD_Alb=Albania, SD_Alg=Algeria,SD_Bah=Bahrain,SD_Dji=Djibouti, SD_Egp=Egypt, SD_Eri=Eritrea, SD_Eth=Ethiopia, SD_Geo=Georgia, SD_Ind=India, SD_Iran=Iran, SD_Iraq=Iraq, SD_Isr=Israel,SD_Jor=Jordan,SD_Kuw=Kuwait,SD_Leb=Lebanon, SD_Lib=Libya, SD_Mor=Morocco, SD_Pak=Pakistan, SD_Sri=`Sri Lanka`, SD_Sud=Sudan, SD_Syr=Syria, SD_Tun=Tunisia, SD_Turk=Turkey, SD_Viet=Vietnam, SD_Yem=Yemen)
+
+
+```
+
+```{r Conflict: Explosions/Remote violence}
+Explosions<-CE1 %>%
+  filter(event_type == 'Explosions/Remote violence') %>%
+  group_by(country) %>% 
+  dplyr::select(event_date, event_type, country)%>%
+  ungroup()%>%
+  filter(country!='United Arab Emirates')%>%filter(country!='Saudi Arabia')%>%filter(country!='Qatar')%>%filter(country!='Oman')
+
+
+Explosions$Date <- as.Date(Explosions$event_date, "%Y/%m/%d")
+setDT(Explosions)
+Explosions_counted<-Explosions[, .N, by=.(Date, country)] 
+
+Explosions_counted1<-Explosions_counted%>%
+  rename(Explosions_Occurences=N, Country=country) %>%
+  na.omit()
+
+Explosions_padded<-pad(Explosions_counted1, group="Country",  start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Explosions_padded<-replace(Explosions_padded, is.na(Explosions_padded), 0)
+
+
+Explosions_padded$Date<-as.character(Explosions_padded$Date)
+Explosions_reshaped<-dcast(Explosions_padded, Date ~ Country)
+Explosions<-Explosions_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Expl_Afg=Afghanistan,Expl_Alb=Albania, Expl_Alg=Algeria,Expl_Bah=Bahrain, Expl_Egp=Egypt, Expl_Eri=Eritrea, Expl_Eth=Ethiopia, Expl_Geo=Georgia, Expl_Ind=India, Expl_Iran=Iran, Expl_Iraq=Iraq, Expl_Isr=Israel,Expl_Jor=Jordan,Expl_Leb=Lebanon, Expl_Lib=Libya, Expl_Mor=Morocco, Expl_Pak=Pakistan, Expl_Sri=`Sri Lanka`, Expl_Sud=Sudan, Expl_Syr=Syria, Expl_Tun=Tunisia, Expl_Turk=Turkey,  Expl_Viet=Vietnam, Expl_Yem=Yemen)
+
+```
+
+```{r Conflict: Battles Missing }
+Battles<-CE1 %>%
+  filter(event_type == 'Battles') %>%
+  group_by(country) %>% 
+  dplyr::select(event_date, event_type, country)%>%
+  ungroup()%>%
+  filter(country!='United Arab Emirates')%>%filter(country!='Saudi Arabia')%>%filter(country!='Qatar')
+
+
+Battles$Date <- as.Date(Battles$event_date, "%Y/%m/%d")
+setDT(Battles)
+Battles_counted<-Battles[, .N, by=.(Date, country)] 
+
+Battles_counted1<-Battles_counted%>%
+  rename(Battles_Occurences=N, Country=country) %>%
+  na.omit()
+
+Battles_padded<-pad(Battles_counted1, group="Country",  start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Battles_padded<-replace(Battles_padded, is.na(Battles_padded), 0)
+
+Battles_padded$Date<-as.character(Battles_padded$Date)
+Battles_reshaped<-dcast(Battles_padded, Date ~ Country)
+Battles<-Battles_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Batt_Afg=Afghanistan,Batt_Alb=Albania, Batt_Alg=Algeria,Batt_Bah=Bahrain,Batt_Dji=Djibouti, Batt_Egp=Egypt, Batt_Eri=Eritrea, Batt_Eth=Ethiopia, Batt_Geo=Georgia, Batt_Ind=India, Batt_Iran=Iran, Batt_Iraq=Iraq, Batt_Isr=Israel,Batt_Jor=Jordan,Batt_Leb=Lebanon, Batt_Lib=Libya, Batt_Mor=Morocco, Batt_Pak=Pakistan, Batt_Sri=`Sri Lanka`, Batt_Sud=Sudan, Batt_Syr=Syria, Batt_Tun=Tunisia, Batt_Turk=Turkey, Batt_Viet=Vietnam, Batt_Yem=Yemen)
+
+```
+
+```{r Conflict: Riots}
+Riots<-CE1 %>%
+  filter(event_type == 'Riots') %>%
+  group_by(country) %>% 
+  dplyr::select(event_date, event_type, country)%>%
+  filter(country!='United Arab Emirates')%>%filter(country!='Saudi Arabia')%>%filter(country!='Qatar')%>%filter(country!='Oman')
+
+
+Riots$Date <- as.Date(Riots$event_date, "%Y/%m/%d")
+setDT(Riots)
+Riots_counted<-Riots[, .N, by=.(Date, country)] 
+
+Riots_counted1<-Riots_counted%>%
+  rename(Riots_Occurences=N, Country=country) %>%
+  na.omit()
+
+Riots_padded<-pad(Riots_counted1, group="Country",  start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Riots_padded<-replace(Riots_padded, is.na(Riots_padded), 0)
+
+Riots_padded$Date<-as.character(Riots_padded$Date)
+Riots_reshaped<-dcast(Riots_padded, Date ~ Country)
+Riots<-Riots_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Riot_Afg=Afghanistan,Riot_Alb=Albania, Riot_Alg=Algeria,Riot_Bah=Bahrain,Riot_Dji=Djibouti, Riot_Egp=Egypt, Riot_Eri=Eritrea, Riot_Eth=Ethiopia, Riot_Geo=Georgia, Riot_Ind=India, Riot_Iran=Iran, Riot_Iraq=Iraq, Riot_Isr=Israel,Riot_Jor=Jordan,Riot_Kuw=Kuwait,Riot_Leb=Lebanon, Riot_Lib=Libya, Riot_Mor=Morocco, Riot_Pak=Pakistan, Riot_Sri=`Sri Lanka`, Riot_Sud=Sudan, Riot_Syr=Syria, Riot_Tun=Tunisia, Riot_Turk=Turkey, Riot_Viet=Vietnam, Riot_Yem=Yemen)
+
+```
+```{r Conflict ReMerged}
+Merged<-merge(VaC, Protests, "Date")
+Merged<-merge(Merged, StrDevs, by="Date")
+Merged<-merge(Merged, Explosions, by="Date")
+Merged<-merge(Merged, Battles, by="Date")
+Conflict_Data<-merge(Merged, Riots, by="Date") 
+
+Conflict_Monthly <- Conflict_Data                                   # Duplicate data
+Conflict_Monthly$Year <- strftime(Conflict_Monthly$Date, "%Y")    # Create year column
+Conflict_Monthly$Month <- strftime(Conflict_Monthly$Date, "%m")   # Create month column
+   
+
+Conflict_Agg <- aggregate(. ~ Month + Year,   
+                        Conflict_Monthly,
+                        FUN = sum)
+
+Conflict_Agg<-Conflict_Agg%>%dplyr::select(!Date)
+
+```
+
+```{r Disasters (Natural/Technical)}
+
+Disasters_Raw <- read_excel("Disasters1.xlsx") 
+
+Disasters_selected<- Disasters_Raw %>%
+  dplyr::select("Start Year", "Start Month", "Start Day","Country","Disaster Group") %>%
+  filter(Country!='United Arab Emirates (the)')%>%filter(Country!='Saudi Arabia')%>%filter(Country!='Qatar')%>%filter(Country!='Oman')
+
+Disasters_selected <- replace(Disasters_selected, is.na(Disasters_selected), 1)#giving this event an arbitrary start day so the date function works
+
+Disasters_selectedDate<-Disasters_selected %>% mutate(Date = make_date(year = `Start Year`, month = `Start Month`, day = `Start Day`))
+
+###Split: Total Disasters####
+
+setDT(Disasters_selectedDate)
+Disasters_counted<-Disasters_selectedDate[, .N, by=.(Date, Country)] %>%
+  rename(DisasterOccurence=N) 
+
+Disasters_padded<-pad(Disasters_counted, group="Country", start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Disasters_padded1 <- Disasters_padded %>% replace(is.na(.), 0)
+
+Disasters_padded1$Date<-as.character(Disasters_padded1$Date)
+Disasters_reshaped<-dcast(Disasters_padded1, Date ~ Country)
+Disasters<-Disasters_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Dis_Afg=Afghanistan,Dis_Alb=Albania, Dis_Alg=Algeria,Dis_Dji=Djibouti, Dis_Egp=Egypt, Dis_Eri=Eritrea, Dis_Eth=Ethiopia, Dis_Geo=Georgia, Dis_Ind=India, Dis_Iran=`Iran (Islamic Republic of)`, Dis_Iraq=Iraq, Dis_Isr=Israel,Dis_Jor=Jordan,Dis_Kuw=Kuwait,Dis_Leb=Lebanon, Dis_Lib=Libya, Dis_Mor=Morocco, Dis_Pak=Pakistan, Dis_Sri=`Sri Lanka`, Dis_Sud=`Sudan (the)`, Dis_Syr=`Syrian Arab Republic`, Dis_Tun=Tunisia, Dis_Turk=Turkey, Dis_Viet=`Viet Nam`, Dis_Yem=Yemen, Dis_Pal=`Palestine, State of`, Dis_SoSud=`South Sudan`)
+
+```
+```{r Natural Disasters}
+Natural<-Disasters_selectedDate %>%
+  filter(`Disaster Group` == 'Natural') %>%
+  dplyr::select(Date,  Country, `Disaster Group`)
+
+setDT(Natural)
+Natural_counted<-Natural[, .N, by=.(Date, Country)] %>%
+  rename(NaturalOccurence=N)
+
+Natural_padded<-pad(Natural_counted, group="Country", start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Natural_padded <- replace(Natural_padded, is.na(Natural_padded), 0)
+
+Natural_padded$Date<-as.character(Natural_padded$Date)
+Natural_reshaped<-dcast(Natural_padded, Date ~ Country)
+Natural<-Natural_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Nat_Afg=Afghanistan,Nat_Alb=Albania, Nat_Alg=Algeria,Nat_Dji=Djibouti, Nat_Egp=Egypt, Nat_Eri=Eritrea, Nat_Eth=Ethiopia, Nat_Geo=Georgia, Nat_Ind=India, Nat_Iran=`Iran (Islamic Republic of)`, Nat_Iraq=Iraq, Nat_Isr=Israel,Nat_Jor=Jordan,Nat_Kuw=Kuwait,Nat_Leb=Lebanon, Nat_Lib=Libya, Nat_Mor=Morocco, Nat_Pak=Pakistan, Nat_Sri=`Sri Lanka`, Nat_Sud=`Sudan (the)`, Nat_Syr=`Syrian Arab Republic`, Nat_Tun=Tunisia, Nat_Turk=Turkey, Nat_Viet=`Viet Nam`, Nat_Yem=Yemen, Nat_Pal=`Palestine, State of`, Nat_SoSud=`South Sudan`)
+
+```
+
+```{r Technological Disaster}
+
+Technological<-Disasters_selectedDate %>%
+  filter(`Disaster Group` == 'Technological') %>%
+  dplyr::select(Date,  Country, `Disaster Group`)
+
+setDT(Technological)
+Technological_counted<-Technological[, .N, by=.(Date,Country)] %>%
+  rename(TechnologicalOccurences=N)
+
+Tech_padded<-pad(Technological_counted, group="Country", start_val =as.Date("2017-01-01"	), end_val = as.Date("2022-12-31"))
+
+Tech_padded <- replace(Tech_padded, is.na(Tech_padded), 0)
+
+Tech_padded$Date<-as.character(Tech_padded$Date)
+Tech_reshaped<-dcast(Tech_padded, Date ~ Country)
+Technological<-Tech_reshaped%>%
+  mutate(Date=as.Date(Date))%>%
+  rename(Tech_Afg=Afghanistan, Tech_Alg=Algeria,Tech_Dji=Djibouti, Tech_Egp=Egypt, Tech_Eth=Ethiopia, Tech_Geo=Georgia, Tech_Ind=India, Tech_Iran=`Iran (Islamic Republic of)`, Tech_Iraq=Iraq, Tech_Isr=Israel,Tech_Jor=Jordan,Tech_Kuw=Kuwait,Tech_Leb=Lebanon, Tech_Lib=Libya, Tech_Mor=Morocco, Tech_Pak=Pakistan , Tech_Sri=`Sri Lanka`, Tech_Sud=`Sudan (the)`, Tech_Syr=`Syrian Arab Republic`, Tech_Tun=Tunisia, Tech_Turk=Turkey, Tech_Viet=`Viet Nam`, Tech_Yem=Yemen, Tech_Pal=`Palestine, State of`, Tech_SoSud=`South Sudan`)
+
+```
+
+```{r Merging Disasters}
+#Merging Disasters####
+
+Disasters_Merged<-merge(Natural, Technological, by="Date" )
+Disasters_Merged<-merge(Disasters_Merged, Disasters, by="Date" )
+
+####Monthly Aggregation 
+Disasters_Monthly <- Disasters_Merged                               
+Disasters_Monthly$Year <- strftime(Disasters_Monthly$Date, "%Y")    
+Disasters_Monthly$Month <- strftime(Disasters_Monthly$Date, "%m")   
+
+Disasters_Agg <- aggregate(. ~ Month + Year,   
+                        Disasters_Monthly,
+                        FUN = sum)
+Disasters_Agg<-Disasters_Agg%>%
+  dplyr::select(!Date)
+```
+
+```{r Primary Commodity Prices}
+#Monthly, no country division 
+
+Commodities_Raw <- read_excel("Commodity_Prices.xls") %>%
+  filter(Commodity=="2017M1"|Commodity=="2017M2"|Commodity=="2017M3"|Commodity=="2017M4"|Commodity=="2017M5"|Commodity=="2017M6"|Commodity=="2017M7"|Commodity=="2017M8"|Commodity=="2017M9"|Commodity=="2017M10"|Commodity=="2017M11"|Commodity=="2017M12"|
+           Commodity=="2018M1"|Commodity=="2018M2"|Commodity=="2018M3"|Commodity=="2018M4"|Commodity=="2018M5"|Commodity=="2018M6"|Commodity=="2018M7"|Commodity=="2018M8"|Commodity=="2018M9"|Commodity=="2018M10"|Commodity=="2018M11"|Commodity=="2018M12"|
+           Commodity=="2019M1"|Commodity=="2019M2"|Commodity=="2019M3"|Commodity=="2019M4"|Commodity=="2019M5"|Commodity=="2019M6"|Commodity=="2019M7"|Commodity=="2019M8"|Commodity=="2019M9"|Commodity=="2019M10"|Commodity=="2019M11"|Commodity=="2019M12"|
+           Commodity=="2020M1"|Commodity=="2020M2"|Commodity=="2020M3"|Commodity=="2020M4"|Commodity=="2020M5"|Commodity=="2020M6"|Commodity=="2020M7"|Commodity=="2020M8"|Commodity=="2020M9"|Commodity=="2020M10"|Commodity=="2020M11"|Commodity=="2020M12"|
+           Commodity=="2021M1"|Commodity=="2021M2"|Commodity=="2021M3"|Commodity=="2021M4"|Commodity=="2021M5"|Commodity=="2021M6"|Commodity=="2021M7"|Commodity=="2021M8"|Commodity=="2021M9"|Commodity=="2021M10"|Commodity=="2021M11"|Commodity=="2021M12"|
+           Commodity=="2022M1"|Commodity=="2022M2"|Commodity=="2022M3"|Commodity=="2022M4"|Commodity=="2022M5"|Commodity=="2022M6"|Commodity=="2022M7"|Commodity=="2022M8"|Commodity=="2022M9"|Commodity=="2022M10"|Commodity=="2022M11"|Commodity=="2022M12")%>%
+  dplyr::select('Commodity','PALLFNF', 'PNFUEL', 'PNRG', 'PAGRI', 'PMETA', 'PFERT' )
+
+Commodities_Dated<-Commodities_Raw %>%
+  separate(Commodity, c("Year", "Month"), "M")
+
+Commodities_Dated$Month <- sprintf("%02d", as.numeric(Commodities_Dated$Month))
+
+```
+
+```{r UK Unemployment,  Monthly}
+
+UK_Unemployment <- read_excel("UK_Unemployment_EndingDec2022.xls") %>%
+  separate(Title, c("Year", "Month"), " ")
+UK_Unemployment[UK_Unemployment == "JAN"] <- "1"
+UK_Unemployment[UK_Unemployment == "FEB"] <- "2"
+UK_Unemployment[UK_Unemployment == "MAR"] <- "3"
+UK_Unemployment[UK_Unemployment == "APR"] <- "4"
+UK_Unemployment[UK_Unemployment == "MAY"] <- "5"
+UK_Unemployment[UK_Unemployment == "JUN"] <- "6"
+UK_Unemployment[UK_Unemployment == "JUL"] <- "7"
+UK_Unemployment[UK_Unemployment == "AUG"] <- "8"
+UK_Unemployment[UK_Unemployment == "SEP"] <- "9"
+UK_Unemployment[UK_Unemployment == "OCT"] <- "10"
+UK_Unemployment[UK_Unemployment == "NOV"] <- "11"
+UK_Unemployment[UK_Unemployment == "DEC"] <- "12"
+
+UK_Unemployment$Year <- as.integer(UK_Unemployment$Year)
+UK_Unemployment$Month <- as.integer(UK_Unemployment$Month)
+UK_Unemployment$Date <- as.yearmon(paste(UK_Unemployment$Year, UK_Unemployment$Month), "%Y %m")
+
+UK_Unemployment<-UK_Unemployment%>%
+  mutate(Year=as.character(Year), Month=as.character(Month))%>%
+  dplyr::select(-Date)
+
+UK_Unemployment$Month <- sprintf("%02d", as.numeric(UK_Unemployment$Month))
+
+```
+
+```{r Channel Weather Raw Daily}
+Channel_Weather <- read_excel("Channel_Weather.xlsx")
+Channel_Weather$datetime <- as.Date(Channel_Weather$datetime)
+
+Channel_Weather_Monthly<-Channel_Weather
+
+Channel_Weather_Monthly$Date <- floor_date(Channel_Weather_Monthly$datetime, "month")
+Channel_Weather_Monthly1<- Channel_Weather_Monthly%>%dplyr::select(!datetime)
+
+
+Channel_Weather_Monthly2<-Channel_Weather_Monthly1 %>%
+  group_by(Date) %>%
+  summarize(mean_temp = mean(temp), mean_min = mean(tempmin), mean_max = mean(tempmax), mean_precip = mean(precip), mean_windgust = mean(windgust), mean_wspeed = mean(windspeed), mean_winddir = mean(winddir), mean_visibility = mean(visibility)) %>%
+  mutate(Year = strftime(Date, "%Y"), Month=strftime(Date, "%m"))%>%ungroup()
+
+Channel_Weather_Monthly3<-Channel_Weather_Monthly2%>% dplyr::select(Year, Month, mean_temp, mean_precip, mean_wspeed)
+
+```
+
+```{r Political Rights / Civil Liberties Raw Yearly}
+Freedom_raw<-read_excel("Freedom_PR-CR.xlsx")
+Freedom<- Freedom_raw%>%
+  dplyr::select("Country/Territory", "Edition", "PR rating", "CL rating", "Total")%>%
+  rename(Country='Country/Territory', Year=Edition)%>%
+  filter(Country=='Afghanistan'|Country=='Albania'|Country=='Iraq'|Country=='Iran'|Country=='Syria'|Country=='Eritrea'|Country=='Sudan'|Country=='Egypt'|Country=='Turkey'|Country=='Ethiopia'|Country=='Vietnam'|Country=='Kuwait'|Country=='India'|Country=='Georgia'|Country=='Pakistan'|Country=='Sri Lanka'|Country=='Yemen'|Country=='Libya'|Country=='Algeria'|Country=='Djibouti'|Country=='Bahrain'|Country=='Israel'|Country=='Jordan'|Country=='Lebanon'|Country=='Morocco'|Country=='Tunisia'|Country=='Yemen'|Country=='Palestine')%>%
+  mutate(Year=as.integer(Year))%>%
+  filter(Year=='2017'|Year=='2018'|Year=='2019'|Year=='2020'|Year=='2021'|Year=='2022')
+  
+Freedom_rep <- Freedom %>% slice(rep(1:n(), each = 12)) %>%
+  mutate(Month=rep(c(1,2,3,4,5, 6, 7, 8, 9, 10, 11, 12),times=156))%>%
+  mutate(Year=as.character(Year), Month=as.character(Month))
+Freedom_rep$Month <- sprintf("%02d", as.numeric(Freedom_rep$Month))
+
+PR1<-Freedom_rep%>%
+  dplyr::select(Year,Month, Country, `PR rating`)
+PR_reshaped<-dcast(PR1, Year+Month ~ Country)
+PR2<-PR_reshaped%>%
+  rename(PR_Afg=Afghanistan,PR_Alb=Albania, PR_Alg=Algeria,PR_Dji=Djibouti, PR_Egp=Egypt, PR_Eri=Eritrea, PR_Eth=Ethiopia, PR_Geo=Georgia, PR_Ind=India, PR_Iran=`Iran`, PR_Iraq=Iraq, PR_Isr=Israel,PR_Jor=Jordan,PR_Kuw=Kuwait,PR_Leb=Lebanon, PR_Lib=Libya, PR_Mor=Morocco, PR_Pak=Pakistan, PR_Sri=`Sri Lanka`, PR_Sud=`Sudan`, PR_Syr=`Syria`, PR_Tun=Tunisia, PR_Turk=Turkey, PR_Viet=`Vietnam`, PR_Yem=Yemen, PR_Bah=Bahrain)
+
+
+CL1<-Freedom_rep%>%
+  dplyr::select(Year,Month, Country, `CL rating`)
+CL_reshaped<-dcast(CL1, Year+Month ~ Country)
+CL2<-CL_reshaped%>%
+  rename(CL_Afg=Afghanistan,CL_Alb=Albania, CL_Alg=Algeria,CL_Dji=Djibouti, CL_Egp=Egypt, CL_Eri=Eritrea, CL_Eth=Ethiopia, CL_Geo=Georgia, CL_Ind=India, CL_Iran=`Iran`, CL_Iraq=Iraq, CL_Isr=Israel,CL_Jor=Jordan,CL_Kuw=Kuwait,CL_Leb=Lebanon, CL_Lib=Libya, CL_Mor=Morocco, CL_Pak=Pakistan, CL_Sri=`Sri Lanka`, CL_Sud=`Sudan`, CL_Syr=`Syria`, CL_Tun=Tunisia, CL_Turk=Turkey, CL_Viet=`Vietnam`, CL_Yem=Yemen, CL_Bah=Bahrain)
+
+PRCL<-merge(PR2, CL2, by=c("Year", "Month"))
+
+```
+
+```{r Exchange Rates}
+Sys.setenv("EXCHANGERATEHOST_ACCESS_KEY"="3a8fa1ac8596fe36706b6ae3116e0676")
+Afghanistan<-historical_exchange_rates("GBP", "AFN", "2017-01-01", "2022-12-31")
+Albania<-historical_exchange_rates("GBP", "ALL", "2017-01-01", "2022-12-31")
+Algeria<-historical_exchange_rates("GBP", "DZD", "2017-01-01", "2022-12-31")
+Egypt<-historical_exchange_rates("GBP", "EGP", "2017-01-01", "2022-12-31")
+Eritrea<-historical_exchange_rates("GBP", "ERN", "2017-01-01", "2022-12-31")
+Ethiopia<-historical_exchange_rates("GBP", "ETB", "2017-01-01", "2022-12-31")
+Georgia<-historical_exchange_rates("GBP", "GEL", "2017-01-01", "2022-12-31")
+India<-historical_exchange_rates("GBP", "INR", "2017-01-01", "2022-12-31")
+Iran<-historical_exchange_rates("GBP", "IRR", "2017-01-01", "2022-12-31")
+Iraq<-historical_exchange_rates("GBP", "IQD", "2017-01-01", "2022-12-31")
+Kuwait<-historical_exchange_rates("GBP", "KWD", "2017-01-01", "2022-12-31")
+Libya<-historical_exchange_rates("GBP", "LYD", "2017-01-01", "2022-12-31")
+Pakistan<-historical_exchange_rates("GBP", "PKR", "2017-01-01", "2022-12-31")
+SriLanka<-historical_exchange_rates("GBP", "LKR", "2017-01-01", "2022-12-31")
+Sudan<-historical_exchange_rates("GBP", "SDG", "2017-01-01", "2022-12-31")
+Syria<-historical_exchange_rates("GBP", "SYP", "2017-01-01", "2022-12-31")
+Turkey<-historical_exchange_rates("GBP", "TRY", "2017-01-01", "2022-12-31")
+Vietnam<-historical_exchange_rates("GBP", "VND", "2017-01-01", "2022-12-31")
+Yemen<-historical_exchange_rates("GBP", "YER", "2017-01-01", "2022-12-31")
+Euro<-historical_exchange_rates("GBP", "EUR", "2017-01-01", "2022-12-31")
+Bahrain<-historical_exchange_rates("GBP", "BHD", "2017-01-01", "2022-12-31")
+Djibouti<-historical_exchange_rates("GBP", "DJF", "2017-01-01", "2022-12-31")
+Israel<-historical_exchange_rates("GBP", "ILS", "2017-01-01", "2022-12-31")
+Jordan<-historical_exchange_rates("GBP", "JOD", "2017-01-01", "2022-12-31")
+Lebanon<-historical_exchange_rates("GBP", "LBP", "2017-01-01", "2022-12-31")
+Morocco<-historical_exchange_rates("GBP", "MAD", "2017-01-01", "2022-12-31")
+Tunisia<-historical_exchange_rates("GBP", "TND", "2017-01-01", "2022-12-31")
+
+merge<-merge(Afghanistan, Albania, by="date")
+merge<-merge(merge, Algeria, by ="date")
+merge<-merge(merge, Egypt, by ="date")
+merge<-merge(merge, Eritrea, by ="date")
+merge<-merge(merge, Ethiopia, by ="date")
+merge<-merge(merge, Georgia, by ="date")
+merge<-merge(merge, India, by ="date")
+merge<-merge(merge, Iran, by ="date")
+merge<-merge(merge, Iraq, by ="date")
+merge<-merge(merge, Kuwait, by ="date")
+merge<-merge(merge, Libya, by ="date")
+merge<-merge(merge, Pakistan, by ="date")
+merge<-merge(merge, SriLanka, by ="date")
+merge<-merge(merge, Sudan, by ="date")
+merge<-merge(merge, Syria, by ="date")
+merge<-merge(merge, Turkey, by ="date")
+merge<-merge(merge, Vietnam, by ="date")
+merge<-merge(merge, Yemen, by ="date")
+merge<-merge(merge, Euro, by ="date")
+merge<-merge(merge, Bahrain, by ="date")
+merge<-merge(merge, Djibouti, by ="date")
+merge<-merge(merge, Israel, by ="date")
+merge<-merge(merge, Jordan, by ="date")
+merge<-merge(merge, Lebanon, by ="date")
+merge<-merge(merge, Morocco, by ="date")
+merge<-merge(merge, Tunisia, by ="date")
+
+Exchange_Rates<-merge
+  
+Exchange_Rates$Year <- strftime(Exchange_Rates$date, "%Y")   
+Exchange_Rates$Month <- strftime(Exchange_Rates$date, "%m")   
+    
+Exchange_Rates_Monthly <- aggregate(cbind(one_GBP_equivalent_to_x_AFN, one_GBP_equivalent_to_x_ALL, one_GBP_equivalent_to_x_DZD, one_GBP_equivalent_to_x_EGP, one_GBP_equivalent_to_x_ERN, one_GBP_equivalent_to_x_ETB, one_GBP_equivalent_to_x_GEL, one_GBP_equivalent_to_x_INR, one_GBP_equivalent_to_x_IRR,one_GBP_equivalent_to_x_IQD, one_GBP_equivalent_to_x_KWD, one_GBP_equivalent_to_x_LYD, one_GBP_equivalent_to_x_PKR, one_GBP_equivalent_to_x_LKR, one_GBP_equivalent_to_x_SDG, one_GBP_equivalent_to_x_SYP, one_GBP_equivalent_to_x_TRY, one_GBP_equivalent_to_x_VND, one_GBP_equivalent_to_x_YER, one_GBP_equivalent_to_x_EUR, one_GBP_equivalent_to_x_BHD, one_GBP_equivalent_to_x_DJF, one_GBP_equivalent_to_x_ILS, one_GBP_equivalent_to_x_JOD, one_GBP_equivalent_to_x_LBP, one_GBP_equivalent_to_x_MAD, one_GBP_equivalent_to_x_TND) ~ Month + Year,   
+                        Exchange_Rates,
+                        FUN = mean)
+
+currencies()
+```
+
+```{r GDP p.c. Raw Yearly}
+
+GDPPC_raw<-read_excel("GDPPC.xls")
+GDP_selected<-GDPPC_raw%>%
+  dplyr::select("Country Name","2017", "2018", "2019","2020", "2021")%>%
+  filter(`Country Name`=="Albania"|`Country Name`=="Afghanistan"|`Country Name`=="Iraq"|`Country Name`=="Iran, Islamic Rep."|`Country Name`=="Syrian Arab Republic"|`Country Name`=="United Kingdom")%>%
+  rename(Country=`Country Name`)
+GDP_melted<-GDP_selected%>%
+  melt(id = "Country")
+GDP_melted1<-GDP_melted%>%
+  rename(Year=variable, GDPpc=value)
+Compared<-GDP_melted1%>%
+  mutate(UKValue=ifelse(Year=="2017",40621.3345, ifelse(Year=="2018",43306.3083, ifelse(Year=="2019",42747.0805, ifelse(Year=="2020",40318.5576, ifelse(Year=="2021",46510.2828, 0))) ) ))
+Compared1<-Compared%>%
+  mutate(GDPComparison=GDPpc/UKValue)
+GDPpc_Final<-Compared1%>%
+  mutate(Country = if_else(Country == 'Syrian Arab Republic', 'Syria', Country))%>%
+  mutate(Country = if_else(Country == 'Iran, Islamic Rep.', 'Iran', Country))
+
+```
+
+```{r Gtrends covid global}
+
+covid_trends= gtrends(keyword="covid", gprop ="web",time= "2017-01-01 2022-12-31")
+covid_time_trend=covid_trends$interest_over_time
+
+covid_time_trend$Year <- strftime(covid_time_trend$date, "%Y")   
+covid_time_trend$Month <- strftime(covid_time_trend$date, "%m")  
+
+covid_time_trend<-covid_time_trend%>%
+  mutate(hits=as.numeric(hits))
+covid_time_trend<-covid_time_trend%>%
+  replace(is.na(.),0)
+
+covid_time_trend<-covid_time_trend%>%
+  dplyr::select(Year, Month, keyword, hits)
+covid_aggr1 <- aggregate(hits ~ Month + Year+keyword, covid_time_trend, FUN = mean)
+covid_aggr1<-dcast(covid_aggr1, Year+Month~keyword)%>%rename(g_covid=covid)
+
+```
+
+```{r Covid UK travel restrictions time series}
+
+covide<-read.csv("https://raw.githubusercontent.com/OxCGRT/covid-policy-tracker/master/data/United%20Kingdom/OxCGRT_GBR_differentiated_withnotes_2020.csv")
+
+covid2020<-covide%>%
+  dplyr::select(Date, C8EV_International.travel.controls)
+
+covide2021<-read.csv("https://raw.githubusercontent.com/OxCGRT/covid-policy-tracker/master/data/United%20Kingdom/OxCGRT_GBR_differentiated_withnotes_2021.csv")
+
+covid2021<-covide2021%>%
+  dplyr::select(Date, C8EV_International.travel.controls)
+
+covide2022<-read.csv("https://raw.githubusercontent.com/OxCGRT/covid-policy-tracker/master/data/United%20Kingdom/OxCGRT_GBR_differentiated_withnotes_2022.csv")
+
+covid2022<-covide2022%>%
+  dplyr::select(Date, C8EV_International.travel.controls)
+
+mergecovid<-rbind(covid2020, covid2021)
+mergecovid1<-rbind(mergecovid, covid2022)
+
+correcteddate<-mergecovid1%>%
+  mutate(Date=as.character(Date))%>%
+  separate(Date, c("Year", "Month", "Day"), sep=cumsum(c(4,2,2)))
+
+aggregatedcovid<-aggregate(C8EV_International.travel.controls ~ Month+Year, correcteddate,FUN = mean)
+
+covid_Filled<-aggregatedcovid%>%
+  mutate(Year=as.integer(Year), Month=as.integer(Month))%>%
+  complete(Year =seq(min(2017), max(2022), 1L) , Month = seq(min(1), max(12), 1L))
+
+covid_Final<-replace(covid_Filled, is.na(covid_Filled), 0)
+
+covid_Final$Month <- sprintf("%02d", as.numeric(covid_Final$Month))
+
+```
+
+```{r Frontex}
+FrontexRaw<-read_excel("FrontexArrivals.xlsx")
+
+Afg_Frontex<-FrontexRaw%>%
+  dplyr::select(-Route, -`Border type or inland`)
+
+melt<-Afg_Frontex%>%
+  melt(id="Nationality")%>%
+  dplyr::select(-Nationality)
+
+nextt<-melt%>%
+  group_by(variable)%>%
+  summarise(value=sum(value))%>%
+  ungroup()
+Separated<-nextt%>%
+  mutate(variable=as.character(variable))%>%
+  separate(variable, c("Month", "Year"), sep=cumsum(c(3,4)))%>%
+  filter(Year==2017|Year==2018|Year==2019|Year==2020|Year==2021|Year==2022)
+Separated[Separated == "JAN"] <- "01"
+Separated[Separated == "FEB"] <- "02"
+Separated[Separated == "MAR"] <- "03"
+Separated[Separated == "APR"] <- "04"
+Separated[Separated == "MAY"] <- "05"
+Separated[Separated == "JUN"] <- "06"
+Separated[Separated == "JUL"] <- "07"
+Separated[Separated == "AUG"] <- "08"
+Separated[Separated == "SEP"] <- "09"
+Separated[Separated == "OCT"] <- "10"
+Separated[Separated == "NOV"] <- "11"
+Separated[Separated == "DEC"] <- "12"
+
+Frontex<-Separated%>%
+  rename(FrontexDetections=value)
+
+```
+
+```{r Gtrends visa}
+
+visa_AF= gtrends(keyword="visa",geo="AF", gprop ="web",time= "2017-01-01 2022-12-31")
+visa_AF_time_trend=visa_AF$interest_over_time
+visa_AF_time_trend$Year <- strftime(visa_AF_time_trend$date, "%Y")   
+visa_AF_time_trend$Month <- strftime(visa_AF_time_trend$date, "%m")  
+visa_AF_time_trend<-visa_AF_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+visa_AF_aggr1 <- aggregate(hits ~ Month + Year+keyword, visa_AF_time_trend, FUN = mean)
+visa_AF_aggr1<-dcast(visa_AF_aggr1, Year+Month~keyword)%>%rename(visa_AF=visa)
+
+visa_AL= gtrends(keyword="visa",geo="AL", gprop ="web",time= "2017-01-01 2022-12-31")
+visa_AL_time_trend=visa_AL$interest_over_time
+visa_AL_time_trend$Year <- strftime(visa_AL_time_trend$date, "%Y")   
+visa_AL_time_trend$Month <- strftime(visa_AL_time_trend$date, "%m")  
+visa_AL_time_trend<-visa_AL_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+visa_AL_aggr1 <- aggregate(hits ~ Month + Year+keyword, visa_AL_time_trend, FUN = mean)
+visa_AL_aggr1<-dcast(visa_AL_aggr1, Year+Month~keyword)%>%rename(visa_AL=visa)
+
+visa_IR= gtrends(keyword="visa",geo="IR", gprop ="web",time= "2017-01-01 2022-12-31")
+visa_IR_time_trend=visa_IR$interest_over_time
+visa_IR_time_trend$Year <- strftime(visa_IR_time_trend$date, "%Y")   
+visa_IR_time_trend$Month <- strftime(visa_IR_time_trend$date, "%m")  
+visa_IR_time_trend<-visa_IR_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+visa_IR_aggr1 <- aggregate(hits ~ Month + Year+keyword, visa_IR_time_trend, FUN = mean)
+visa_IR_aggr1<-dcast(visa_IR_aggr1, Year+Month~keyword)%>%rename(visa_IR=visa)
+
+visa_SY= gtrends(keyword="visa",geo="SY", gprop ="web",time= "2017-01-01 2022-12-31")
+visa_SY_time_trend=visa_SY$interest_over_time
+visa_SY_time_trend$Year <- strftime(visa_SY_time_trend$date, "%Y")   
+visa_SY_time_trend$Month <- strftime(visa_SY_time_trend$date, "%m")  
+visa_SY_time_trend<-visa_SY_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+visa_SY_aggr1 <- aggregate(hits ~ Month + Year+keyword, visa_SY_time_trend, FUN = mean)
+visa_SY_aggr1<-dcast(visa_SY_aggr1, Year+Month~keyword)%>%rename(visa_SY=visa)
+
+visa_IQ= gtrends(keyword="visa",geo="IQ", gprop ="web",time= "2017-01-01 2022-12-31")
+visa_IQ_time_trend=visa_IQ$interest_over_time
+visa_IQ_time_trend$Year <- strftime(visa_IQ_time_trend$date, "%Y")   
+visa_IQ_time_trend$Month <- strftime(visa_IQ_time_trend$date, "%m")  
+visa_IQ_time_trend<-visa_IQ_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+visa_IQ_aggr1 <- aggregate(hits ~ Month + Year+keyword, visa_IQ_time_trend, FUN = mean)
+visa_IQ_aggr1<-dcast(visa_IQ_aggr1, Year+Month~keyword)%>%rename(visa_IQ=visa)
+
+
+visamerge<-merge(visa_AF_aggr1, visa_AL_aggr1, by=c("Year", "Month"))
+visamerge<-merge(visamerge, visa_IR_aggr1, by=c("Year", "Month"))
+visamerge<-merge(visamerge, visa_IQ_aggr1, by=c("Year", "Month"))
+visamerge<-merge(visamerge, visa_SY_aggr1, by=c("Year", "Month"))
+
+```
+
+```{r Gtrends job}
+job_AF= gtrends(keyword="job",geo="AF", gprop ="web",time= "2017-01-01 2022-12-31")
+job_AF_time_trend=job_AF$interest_over_time
+job_AF_time_trend$Year <- strftime(job_AF_time_trend$date, "%Y")   
+job_AF_time_trend$Month <- strftime(job_AF_time_trend$date, "%m")  
+job_AF_time_trend<-job_AF_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+job_AF_aggr1 <- aggregate(hits ~ Month + Year+keyword, job_AF_time_trend, FUN = mean)
+job_AF_aggr1<-dcast(job_AF_aggr1, Year+Month~keyword)%>%rename(job_AF=job)
+
+job_AL= gtrends(keyword="job",geo="AL", gprop ="web",time= "2017-01-01 2022-12-31")
+job_AL_time_trend=job_AL$interest_over_time
+job_AL_time_trend$Year <- strftime(job_AL_time_trend$date, "%Y")   
+job_AL_time_trend$Month <- strftime(job_AL_time_trend$date, "%m")  
+job_AL_time_trend<-job_AL_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+job_AL_aggr1 <- aggregate(hits ~ Month + Year+keyword, job_AL_time_trend, FUN = mean)
+job_AL_aggr1<-dcast(job_AL_aggr1, Year+Month~keyword)%>%rename(job_AL=job)
+
+job_IR= gtrends(keyword="job",geo="IR", gprop ="web",time= "2017-01-01 2022-12-31")
+job_IR_time_trend=job_IR$interest_over_time
+job_IR_time_trend$Year <- strftime(job_IR_time_trend$date, "%Y")   
+job_IR_time_trend$Month <- strftime(job_IR_time_trend$date, "%m")  
+job_IR_time_trend<-job_IR_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+job_IR_aggr1 <- aggregate(hits ~ Month + Year+keyword, job_IR_time_trend, FUN = mean)
+job_IR_aggr1<-dcast(job_IR_aggr1, Year+Month~keyword)%>%rename(job_IR=job)
+
+job_SY= gtrends(keyword="job",geo="SY", gprop ="web",time= "2017-01-01 2022-12-31")
+job_SY_time_trend=job_SY$interest_over_time
+job_SY_time_trend$Year <- strftime(job_SY_time_trend$date, "%Y")   
+job_SY_time_trend$Month <- strftime(job_SY_time_trend$date, "%m")  
+job_SY_time_trend<-job_SY_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+job_SY_aggr1 <- aggregate(hits ~ Month + Year+keyword, job_SY_time_trend, FUN = mean)
+job_SY_aggr1<-dcast(job_SY_aggr1, Year+Month~keyword)%>%rename(job_SY=job)
+
+job_IQ= gtrends(keyword="job",geo="IQ", gprop ="web",time= "2017-01-01 2022-12-31")
+job_IQ_time_trend=job_IQ$interest_over_time
+job_IQ_time_trend$Year <- strftime(job_IQ_time_trend$date, "%Y")   
+job_IQ_time_trend$Month <- strftime(job_IQ_time_trend$date, "%m")  
+job_IQ_time_trend<-job_IQ_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+job_IQ_aggr1 <- aggregate(hits ~ Month + Year+keyword, job_IQ_time_trend, FUN = mean)
+job_IQ_aggr1<-dcast(job_IQ_aggr1, Year+Month~keyword)%>%rename(job_IQ=job)
+
+
+jobmerge<-merge(job_AF_aggr1, job_AL_aggr1, by=c("Year", "Month"))
+jobmerge<-merge(jobmerge, job_IR_aggr1, by=c("Year", "Month"))
+jobmerge<-merge(jobmerge, job_IQ_aggr1, by=c("Year", "Month"))
+jobmerge<-merge(jobmerge, job_SY_aggr1, by=c("Year", "Month"))
+
+```
+
+```{r Gtrends england}
+england_AF= gtrends(keyword="england",geo="AF", gprop ="web",time= "2017-01-01 2022-12-31")
+england_AF_time_trend=england_AF$interest_over_time
+england_AF_time_trend$Year <- strftime(england_AF_time_trend$date, "%Y")   
+england_AF_time_trend$Month <- strftime(england_AF_time_trend$date, "%m")  
+england_AF_time_trend<-england_AF_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+england_AF_aggr1 <- aggregate(hits ~ Month + Year+keyword, england_AF_time_trend, FUN = mean)
+england_AF_aggr1<-dcast(england_AF_aggr1, Year+Month~keyword)%>%rename(england_AF=england)
+
+england_AL= gtrends(keyword="england",geo="AL", gprop ="web",time= "2017-01-01 2022-12-31")
+england_AL_time_trend=england_AL$interest_over_time
+england_AL_time_trend$Year <- strftime(england_AL_time_trend$date, "%Y")   
+england_AL_time_trend$Month <- strftime(england_AL_time_trend$date, "%m")  
+england_AL_time_trend<-england_AL_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+england_AL_aggr1 <- aggregate(hits ~ Month + Year+keyword, england_AL_time_trend, FUN = mean)
+england_AL_aggr1<-dcast(england_AL_aggr1, Year+Month~keyword)%>%rename(england_AL=england)
+
+england_IR= gtrends(keyword="england",geo="IR", gprop ="web",time= "2017-01-01 2022-12-31")
+england_IR_time_trend=england_IR$interest_over_time
+england_IR_time_trend$Year <- strftime(england_IR_time_trend$date, "%Y")   
+england_IR_time_trend$Month <- strftime(england_IR_time_trend$date, "%m")  
+england_IR_time_trend<-england_IR_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+england_IR_aggr1 <- aggregate(hits ~ Month + Year+keyword, england_IR_time_trend, FUN = mean)
+england_IR_aggr1<-dcast(england_IR_aggr1, Year+Month~keyword)%>%rename(england_IR=england)
+
+england_SY= gtrends(keyword="england",geo="SY", gprop ="web",time= "2017-01-01 2022-12-31")
+england_SY_time_trend=england_SY$interest_over_time
+england_SY_time_trend$Year <- strftime(england_SY_time_trend$date, "%Y")   
+england_SY_time_trend$Month <- strftime(england_SY_time_trend$date, "%m")  
+england_SY_time_trend<-england_SY_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+england_SY_aggr1 <- aggregate(hits ~ Month + Year+keyword, england_SY_time_trend, FUN = mean)
+england_SY_aggr1<-dcast(england_SY_aggr1, Year+Month~keyword)%>%rename(england_SY=england)
+
+england_IQ= gtrends(keyword="england",geo="IQ", gprop ="web",time= "2017-01-01 2022-12-31")
+england_IQ_time_trend=england_IQ$interest_over_time
+england_IQ_time_trend$Year <- strftime(england_IQ_time_trend$date, "%Y")   
+england_IQ_time_trend$Month <- strftime(england_IQ_time_trend$date, "%m")  
+england_IQ_time_trend<-england_IQ_time_trend%>%
+  mutate(hits=as.numeric(hits))%>%
+  replace(is.na(.),0)%>%
+  dplyr::select(Year, Month, keyword, hits)
+england_IQ_aggr1 <- aggregate(hits ~ Month + Year+keyword, england_IQ_time_trend, FUN = mean)
+england_IQ_aggr1<-dcast(england_IQ_aggr1, Year+Month~keyword)%>%rename(england_IQ=england)
+
+englandmerge<-merge(england_AF_aggr1, england_AL_aggr1, by=c("Year", "Month"))
+englandmerge<-merge(englandmerge, england_IR_aggr1, by=c("Year", "Month"))
+englandmerge<-merge(englandmerge, england_IQ_aggr1, by=c("Year", "Month"))
+englandmerge<-merge(englandmerge, england_SY_aggr1, by=c("Year", "Month"))
+
+```
+
+```{r gtrends merger}
+
+gmmerge<-merge(visamerge, jobmerge, by=c("Year", "Month"))
+gmerge<-merge(gmmerge, englandmerge,by=c("Year", "Month"))
+
+```
+
+```{r YearMonth Final Merge }
+
+M1<-merge(FOI_Complete,Conflict_Agg, by=c("Year", "Month"))
+M2<-merge(M1, Disasters_Agg, by=c("Year", "Month"))
+M3<-merge(M2,Exchange_Rates_Monthly, by=c("Year", "Month"))
+M4<-merge(M3,Channel_Weather_Monthly3, by=c("Year", "Month"))
+M5<-merge(M4,Commodities_Dated, by=c("Year", "Month"))
+M6<-merge(M5,covid_Final, by=c("Year", "Month"))
+M7<-merge(M6, covid_aggr1, by=c("Year", "Month"))
+M8<-merge(M7, Frontex, by=c("Year", "Month"))
+M9<-merge(M8, PRCL, by=c("Year", "Month"))
+M10<-merge(M9, gmerge, by=c("Year", "Month"))
+M11<-merge(M10, UK_Unemployment, by=c("Year", "Month"))
+
+M11$ID <- seq_along(M11[,1])
+M11$Dublin<-ifelse(M11$ID>48, 0, 1)
+
+DF<-M11%>%
+  rename(SBArrivals=`Small boat arrivals`)%>%
+  rename(Frontex_Detections=FrontexDetections)
+
+write.csv(DF, "ThesisFrame1.csv", row.names=FALSE)
+
+```
+
+```{r Begin analyis}
+Data<-read.csv("ThesisFrame1.csv")
+```
+
+```{r Decomposition}
+Data_Graphs<-Data%>%
+  rename(`Small Boat`=SBArrivals)
+
+Dataplot<-Data_Graphs%>%
+  dplyr::select(`Small Boat`, Year, Month)
+time.points.plot <- seq.Date(as.Date("2017-01-01"), by = "month", length.out= 72)
+Dataplot1 <- zoo(Dataplot, time.points.plot)
+
+ts_info(Dataplot1)
+TSstudio::ts_plot(Dataplot1, title="Monthly Arrivals", Xtitle="Time", Ytitle="Number of Arrivals")
+
+time.points.plot
+
+ts<-ts(Dataplot$`Small Boat`, start=c(2017,1), end=c(2022,12), frequency=12)
+frequency(ts)
+ts_de<-decompose(ts)
+plot(ts_de)
+```
+
+
+```{r Selecting data from top nationalities}
+Data<-read.csv("ThesisFrame1.csv")
+
+Data1<-Data%>%
+  dplyr::select(Year, Month, SBArrivals, Dublin, contains("Unemployment"), contains("Alg"), contains("Afg"), contains("Iran"), contains("Iran"), contains("Syr"), contains("Eri"), contains("Sud"), contains("Egp"), contains("Turk"), contains("Ind"), contains("Eth"), contains("Viet"), contains("Kuw"), contains("Geo"), contains("Pak"), contains("Sri"), contains("Yem"), contains("Alg"),contains("Lib"),contains("job"), contains("visa"), contains("england"), mean_temp,mean_precip,mean_wspeed, PALLFNF, PNFUEL, PNRG, PAGRI,PMETA, PFERT,C8EV_International.travel.controls, g_covid, Frontex_Detections, contains("equivalent"))%>%
+  dplyr::select(-one_GBP_equivalent_to_x_BHD, -one_GBP_equivalent_to_x_DJF, -one_GBP_equivalent_to_x_ILS, -one_GBP_equivalent_to_x_JOD, -one_GBP_equivalent_to_x_LBP,-one_GBP_equivalent_to_x_TND, -one_GBP_equivalent_to_x_MAD)%>%
+  rename(UK_Unemployment=contains("Unemployment"))
+Data1$Month <- sprintf("%02d", as.numeric(Data1$Month))
+```
+
+```{r 6 month lags}
+DF_vars1<-Data1%>%
+  dplyr::select(-Year,-Month, -`SBArrivals`)
+DF_split1<-Data1%>%
+  dplyr::select(Year,Month,SBArrivals)
+
+lags <- seq(6)
+lag_names <- paste("lag", formatC(lags, width = nchar(max(lags)), flag = "0"), 
+  sep = "_")
+lag_functions <- setNames(paste("dplyr::lag(., ", lags, ")"), lag_names)
+
+DFLags1<-DF_vars1%>% mutate_all(funs_(lag_functions))
+
+DF_lags1<-bind_cols(DF_split1, DFLags1)
+
+DF_lags1 <- DF_lags1[-(1:6),]
+
+```
+
+```{r Causal Impact Analysis}
+Data4<-DF_lags1%>%
+  dplyr::select(-Year, -Month)
+
+time.points.lag <- seq.Date(as.Date("2017-07-01"), by = "month", length.out= 66)
+Data5 <- zoo(Data4, time.points.lag)
+
+
+pre.period.lag <- as.Date(c("2017-07-01", "2022-03-01")) 
+post.period.lag <- as.Date(c("2022-04-01", "2022-12-01"))
+
+impact_19 <- CausalImpact(Data5, pre.period.lag, post.period.lag, model.args=list(nseasons=12))
+
+
+plot(impact_19, c("original", "pointwise", "cumulative"))+labs(x="Time", y="Small Boat Arrivals")
+
+summary(impact_19, "report")
+summary(impact_19)
+
+plot(impact_19$model$bsts.model, "coefficients",inclusion.threshold=.01 ,cex.names=.4) 
+```
